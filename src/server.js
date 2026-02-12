@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
-const { createBot } = require('./bots');
+// Bots removed — pure human-to-human (or AI player) matchmaking only
 
 const app = express();
 const server = http.createServer(app);
@@ -46,9 +46,9 @@ function generateGameId() {
 // Matchmaking
 // ============================================================
 function tryMatch(socket, playerName) {
-  // 50/50 chance: match with waiting human or spawn a bot
-  if (waitingQueue.length > 0 && Math.random() > 0.4) {
-    // Match with human
+  // Pure matchmaking — only match with real players in the queue
+  if (waitingQueue.length > 0 && waitingQueue[0].socketId !== socket.id) {
+    // Match with waiting human
     const opponent = waitingQueue.shift();
     const gameId = generateGameId();
     const game = new Game(gameId,
@@ -57,41 +57,13 @@ function tryMatch(socket, playerName) {
       false
     );
     startGame(game);
-  } else if (waitingQueue.length > 0 && waitingQueue[0].socketId === socket.id) {
-    // Already in queue, don't double-add
+  } else if (waitingQueue.find(p => p.socketId === socket.id)) {
+    // Already in queue
     return;
-  } else if (Math.random() < 0.5 || waitingQueue.length === 0) {
-    // Add to queue and maybe spawn bot after delay
+  } else {
+    // Add to queue and wait
     waitingQueue.push({ socketId: socket.id, name: playerName });
     socket.emit('waiting', { position: waitingQueue.length });
-
-    // After 5 seconds, if still waiting, match with bot
-    setTimeout(() => {
-      const idx = waitingQueue.findIndex(p => p.socketId === socket.id);
-      if (idx !== -1) {
-        waitingQueue.splice(idx, 1);
-        const bot = createBot();
-        const gameId = generateGameId();
-        const game = new Game(gameId,
-          { socketId: socket.id, name: playerName },
-          { botId: bot.id, name: bot.name, isBot: true },
-          true
-        );
-        game.bot = bot;
-        startGame(game);
-      }
-    }, 5000 + Math.random() * 3000);
-  } else {
-    // Match with bot immediately
-    const bot = createBot();
-    const gameId = generateGameId();
-    const game = new Game(gameId,
-      { socketId: socket.id, name: playerName },
-      { botId: bot.id, name: bot.name, isBot: true },
-      true
-    );
-    game.bot = bot;
-    startGame(game);
   }
 }
 
