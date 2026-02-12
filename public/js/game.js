@@ -244,7 +244,10 @@ socket.on('reveal', (data) => {
   els.revealResult.classList.add('hidden');
 
   setTimeout(() => {
-    if (data.player2IsBot) {
+    // Check if our opponent was a bot (could be player1 or player2 depending on perspective)
+    const opponentIsBot = data.player2IsBot || data.player1IsBot || false;
+    
+    if (opponentIsBot) {
       els.revealIcon.textContent = '🤖';
       els.revealText.textContent = `IT WAS A BOT!`;
       els.revealCard.classList.add('bot-reveal');
@@ -265,15 +268,15 @@ socket.on('reveal', (data) => {
           els.resultText.textContent = '❌ YOU WERE WRONG!';
           els.resultText.className = 'wrong';
         }
-        els.resultDetail.textContent = `You guessed "${data.yourVote}" — they were ${data.player2IsBot ? 'a bot' : 'human'}`;
+        els.resultDetail.textContent = `You guessed "${data.yourVote}" — they were ${opponentIsBot ? 'a bot' : 'human'}`;
       } else {
         els.resultText.textContent = '⏰ TIME RAN OUT';
         els.resultText.className = 'wrong';
-        els.resultDetail.textContent = `They were ${data.player2IsBot ? 'a bot' : 'human'}!`;
+        els.resultDetail.textContent = `They were ${opponentIsBot ? 'a bot' : 'human'}!`;
       }
 
-      if (data.player2IsBot && data.player2BotPersonality) {
-        els.resultDetail.textContent += ` (${data.player2BotPersonality} personality)`;
+      if (opponentIsBot && data.player2BotPersonality) {
+        els.resultDetail.textContent += ` (${data.player2BotPersonality})`;
       }
 
       // Stats

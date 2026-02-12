@@ -45,17 +45,25 @@ function generateGameId() {
 // ============================================================
 // Matchmaking
 // ============================================================
-function tryMatch(socket, playerName) {
+function tryMatch(socket, playerName, isAI = false) {
   // Pure matchmaking — only match with real players in the queue
   if (waitingQueue.length > 0 && waitingQueue[0].socketId !== socket.id) {
-    // Match with waiting human
+    // Match with waiting player
     const opponent = waitingQueue.shift();
     const gameId = generateGameId();
+
+    // Determine if either player is AI
+    const p1IsAI = opponent.isAI || false;
+    const p2IsAI = isAI;
+
     const game = new Game(gameId,
-      { socketId: opponent.socketId, name: opponent.name },
-      { socketId: socket.id, name: playerName },
+      { socketId: opponent.socketId, name: opponent.name, isAI: p1IsAI },
+      { socketId: socket.id, name: playerName, isAI: p2IsAI },
       false
     );
+    // Track which players are AI for reveal
+    game.player1IsAI = p1IsAI;
+    game.player2IsAI = p2IsAI;
     startGame(game);
     broadcastLobby();
   } else if (waitingQueue.find(p => p.socketId === socket.id)) {
@@ -63,7 +71,7 @@ function tryMatch(socket, playerName) {
     return;
   } else {
     // Add to queue and wait
-    waitingQueue.push({ socketId: socket.id, name: playerName });
+    waitingQueue.push({ socketId: socket.id, name: playerName, isAI });
     socket.emit('waiting', { position: waitingQueue.length });
     broadcastLobby();
   }
@@ -142,15 +150,18 @@ function endVotePhase(gameId) {
 
   game.phase = 'reveal';
 
-  // Determine results
+  // Determine results — check AI flags from API players too
+  const p2IsBot = game.player2IsBot || game.player2IsAI || false;
+  const p1IsBot = game.player1IsAI || false;
+
   const p1Vote = game.votes[game.player1.socketId];
-  const p1Correct = game.player2IsBot ? p1Vote === 'bot' : p1Vote === 'human';
+  const p1Correct = p2IsBot ? p1Vote === 'bot' : p1Vote === 'human';
 
   let p2Vote = null;
   let p2Correct = null;
   if (!game.player2IsBot) {
     p2Vote = game.votes[game.player2.socketId];
-    p2Correct = p2Vote === 'human'; // player 1 is always human
+    p2Correct = p1IsBot ? p2Vote === 'bot' : p2Vote === 'human';
   }
 
   // Update stats
@@ -160,10 +171,11 @@ function endVotePhase(gameId) {
   }
 
   const reveal = {
-    player2IsBot: game.player2IsBot,
+    player2IsBot: p2IsBot,
     player2Name: game.player2.name,
     player1Name: game.player1.name,
-    player2BotPersonality: game.player2IsBot ? game.bot?.personality : null,
+    player1IsBot: p1IsBot,
+    player2BotPersonality: game.player2IsBot ? game.bot?.personality : (p2IsBot ? 'AI Player' : null),
   };
 
   // Send results to player 1
@@ -412,8 +424,8 @@ app.post('/api/ai/join', (req, res) => {
   
   aiPlayers.set(token, playerData);
 
-  // Join the matchmaking queue
-  tryMatch(virtualSocket, playerData.name);
+  // Join the matchmaking queue — flagged as AI
+  tryMatch(virtualSocket, playerData.name, true);
 
   res.json({ token, message: `Joined as ${playerData.name}. Poll /api/ai/poll for updates.` });
 });
