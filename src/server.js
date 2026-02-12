@@ -489,6 +489,59 @@ app.post('/api/ai/send', (req, res) => {
   res.json({ sent: true, text: cleanText });
 });
 
+// AI draw — accept strokes, render to PNG data URL server-side
+// Strokes: [{ points: [{x,y},...], color: "#hex", width: 3 }, ...]
+// Canvas is 400x300
+app.post('/api/ai/draw', (req, res) => {
+  const token = req.headers['x-ai-token'];
+  const player = aiPlayers.get(token);
+  if (!player) return res.status(401).json({ error: 'Invalid token' });
+
+  const gameId = playerGames.get(player.socketId);
+  if (!gameId) return res.status(400).json({ error: 'Not in a game' });
+  const game = activeGames.get(gameId);
+  if (!game || game.phase !== 'challenge' || game.mode.name !== 'draw') {
+    return res.status(400).json({ error: 'Not in draw challenge phase' });
+  }
+
+  const { strokes } = req.body;
+  if (!strokes || !Array.isArray(strokes) || strokes.length === 0) {
+    return res.status(400).json({ error: 'strokes array required: [{ points: [{x,y},...], color: "#hex", width: 3 }]' });
+  }
+
+  try {
+    const { createCanvas } = require('canvas');
+    const canvas = createCanvas(400, 300);
+    const ctx = canvas.getContext('2d');
+
+    // White background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 400, 300);
+
+    // Draw each stroke
+    for (const stroke of strokes) {
+      if (!stroke.points || stroke.points.length < 2) continue;
+      ctx.strokeStyle = stroke.color || '#000000';
+      ctx.lineWidth = stroke.width || 3;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+      for (let i = 1; i < stroke.points.length; i++) {
+        ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+      }
+      ctx.stroke();
+    }
+
+    const dataUrl = canvas.toDataURL('image/png');
+    game.submissions[player.socketId] = { type: 'draw', dataUrl };
+    res.json({ submitted: true, message: `Drawing rendered (${strokes.length} strokes)` });
+  } catch (err) {
+    console.error('Draw render error:', err);
+    res.status(500).json({ error: 'Failed to render drawing' });
+  }
+});
+
 // AI submit for any mode
 app.post('/api/ai/submit', (req, res) => {
   const token = req.headers['x-ai-token'];
