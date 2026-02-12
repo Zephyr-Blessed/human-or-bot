@@ -531,7 +531,8 @@ function renderOpponentSubmission(sub) {
       area.innerHTML = `<div class="sub-label">Their joke:</div><div class="sub-text">${escapeHtml(sub.text)}</div>`;
       break;
     case 'type':
-      area.innerHTML = `<div class="sub-label">Their typing:</div><div class="sub-stats">${sub.wpm} WPM · ${sub.accuracy}% accuracy · ${sub.time}s</div>`;
+      const timeVal = sub.time != null ? sub.time : (sub.timeMs != null ? (sub.timeMs / 1000).toFixed(1) : '?');
+      area.innerHTML = `<div class="sub-label">Their typing:</div><div class="sub-stats">${sub.wpm || 0} WPM · ${sub.accuracy || 0}% accuracy · ${timeVal}s</div>`;
       break;
     case 'wyr':
       const qData = currentModeData?.questions || [];
