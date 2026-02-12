@@ -342,6 +342,196 @@ io.on('connection', (socket) => {
 });
 
 // ============================================================
+// AI Player HTTP API — allows AI to play via REST calls
+// ============================================================
+const aiPlayers = new Map(); // token -> { socketId, name, messages, pendingMessages }
+
+app.use(express.json());
+
+// Join the queue as an AI player
+app.post('/api/ai/join', (req, res) => {
+  const { name, secret } = req.body;
+  if (secret !== process.env.AI_SECRET && secret !== 'zephyr-plays-2026') {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const token = `ai_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  
+  // Create a virtual socket for the AI player
+  const virtualSocket = {
+    id: `ai_${token}`,
+    emit: (event, data) => {
+      const player = aiPlayers.get(token);
+      if (!player) return;
+      
+      if (event === 'game_start') {
+        player.gameStarted = true;
+        player.opponent = data.opponent.name;
+        player.roundTime = data.roundTime;
+        player.gameId = data.gameId;
+        player.events.push({ type: 'game_start', data, timestamp: Date.now() });
+      } else if (event === 'message') {
+        player.pendingMessages.push({ from: data.from, text: data.text, timestamp: Date.now() });
+        player.events.push({ type: 'message', data, timestamp: Date.now() });
+      } else if (event === 'opponent_typing') {
+        player.events.push({ type: 'opponent_typing', timestamp: Date.now() });
+      } else if (event === 'vote_phase') {
+        player.phase = 'voting';
+        player.events.push({ type: 'vote_phase', data, timestamp: Date.now() });
+      } else if (event === 'reveal') {
+        player.phase = 'reveal';
+        player.revealData = data;
+        player.events.push({ type: 'reveal', data, timestamp: Date.now() });
+      } else if (event === 'waiting') {
+        player.events.push({ type: 'waiting', data, timestamp: Date.now() });
+      } else if (event === 'opponent_left') {
+        player.events.push({ type: 'opponent_left', timestamp: Date.now() });
+      } else if (event === 'lobby_update') {
+        player.lobby = data;
+      }
+    },
+  };
+
+  // Register virtual socket
+  io.sockets.sockets.set(virtualSocket.id, virtualSocket);
+
+  const playerData = {
+    socketId: virtualSocket.id,
+    virtualSocket,
+    name: name || 'AI Player',
+    messages: [],
+    pendingMessages: [],
+    events: [],
+    phase: 'waiting',
+    gameStarted: false,
+    opponent: null,
+    lobby: null,
+    revealData: null,
+    isAI: true,
+  };
+  
+  aiPlayers.set(token, playerData);
+
+  // Join the matchmaking queue
+  tryMatch(virtualSocket, playerData.name);
+
+  res.json({ token, message: `Joined as ${playerData.name}. Poll /api/ai/poll for updates.` });
+});
+
+// Poll for game state and new messages
+app.get('/api/ai/poll', (req, res) => {
+  const token = req.headers['x-ai-token'];
+  const player = aiPlayers.get(token);
+  if (!player) return res.status(401).json({ error: 'Invalid token' });
+
+  const newMessages = [...player.pendingMessages];
+  player.pendingMessages = [];
+
+  const recentEvents = player.events.slice(-20);
+
+  res.json({
+    phase: player.phase,
+    gameStarted: player.gameStarted,
+    opponent: player.opponent,
+    newMessages,
+    allMessages: player.messages,
+    events: recentEvents,
+    lobby: player.lobby,
+    reveal: player.revealData,
+  });
+});
+
+// Send a message
+app.post('/api/ai/send', (req, res) => {
+  const token = req.headers['x-ai-token'];
+  const player = aiPlayers.get(token);
+  if (!player) return res.status(401).json({ error: 'Invalid token' });
+
+  const { text } = req.body;
+  if (!text) return res.status(400).json({ error: 'No text' });
+
+  const gameId = playerGames.get(player.socketId);
+  if (!gameId) return res.status(400).json({ error: 'Not in a game' });
+  
+  const game = activeGames.get(gameId);
+  if (!game || game.phase !== 'chat') return res.status(400).json({ error: 'Game not in chat phase' });
+
+  const cleanText = text.slice(0, 500);
+  game.messages.push({ from: player.socketId, text: cleanText });
+  player.messages.push({ from: 'self', text: cleanText });
+
+  // Send to opponent
+  const opponentSocketId = game.player1.socketId === player.socketId 
+    ? game.player2.socketId 
+    : game.player1.socketId;
+  
+  const opponentSocket = io.sockets.sockets.get(opponentSocketId);
+  if (opponentSocket && opponentSocket.emit) {
+    opponentSocket.emit('message', { from: 'opponent', text: cleanText, timestamp: Date.now() });
+  }
+
+  res.json({ sent: true, text: cleanText });
+});
+
+// Vote
+app.post('/api/ai/vote', (req, res) => {
+  const token = req.headers['x-ai-token'];
+  const player = aiPlayers.get(token);
+  if (!player) return res.status(401).json({ error: 'Invalid token' });
+
+  const { vote } = req.body;
+  if (vote !== 'human' && vote !== 'bot') return res.status(400).json({ error: 'Vote must be "human" or "bot"' });
+
+  const gameId = playerGames.get(player.socketId);
+  if (!gameId) return res.status(400).json({ error: 'Not in a game' });
+  
+  const game = activeGames.get(gameId);
+  if (!game || game.phase !== 'voting') return res.status(400).json({ error: 'Not in voting phase' });
+
+  game.votes[player.socketId] = vote;
+
+  // Check if all voted
+  const neededVotes = game.player2IsBot ? 1 : 2;
+  if (Object.keys(game.votes).length >= neededVotes) {
+    clearTimeout(game.voteTimer);
+    endVotePhase(gameId);
+  }
+
+  res.json({ voted: vote });
+});
+
+// Leave
+app.post('/api/ai/leave', (req, res) => {
+  const token = req.headers['x-ai-token'];
+  const player = aiPlayers.get(token);
+  if (!player) return res.status(401).json({ error: 'Invalid token' });
+
+  // Remove from queue
+  const idx = waitingQueue.findIndex(p => p.socketId === player.socketId);
+  if (idx !== -1) {
+    waitingQueue.splice(idx, 1);
+    broadcastLobby();
+  }
+
+  // Clean up game
+  const gameId = playerGames.get(player.socketId);
+  if (gameId) {
+    const game = activeGames.get(gameId);
+    if (game) {
+      const opponentId = game.player1.socketId === player.socketId
+        ? game.player2.socketId : game.player1.socketId;
+      const opponentSocket = io.sockets.sockets.get(opponentId);
+      if (opponentSocket && opponentSocket.emit) opponentSocket.emit('opponent_left');
+      cleanupGame(gameId);
+    }
+  }
+
+  io.sockets.sockets.delete(player.socketId);
+  aiPlayers.delete(token);
+  res.json({ left: true });
+});
+
+// ============================================================
 // Server stats endpoint
 // ============================================================
 app.get('/api/stats', (req, res) => {
