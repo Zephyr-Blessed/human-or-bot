@@ -4,7 +4,7 @@
 
 const GAME_MODES = [
   { id: 0, name: 'chat', emoji: '💬', label: 'Chat', roundTime: 120 },
-  { id: 1, name: 'draw', emoji: '🎨', label: 'Draw Something', roundTime: 60 },
+  { id: 1, name: 'draw', emoji: '🎨', label: 'Draw Something', roundTime: 30 },
   { id: 2, name: 'joke', emoji: '😂', label: 'Tell a Joke', roundTime: 90 },
   { id: 3, name: 'type', emoji: '⌨️', label: 'Type Race', roundTime: 30 },
   { id: 4, name: 'wyr', emoji: '🤔', label: 'Would You Rather', roundTime: 90 },
