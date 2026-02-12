@@ -52,23 +52,29 @@
       </div>
     </div>
 
-    <!-- SCREEN: Chat -->
+    <!-- SCREEN: Chat / Challenge -->
     <div id="screen-chat" class="screen">
       <div class="chat-header">
         <div class="opponent-info">
           <div class="pixel-avatar opponent-avatar">?</div>
           <span id="opponentName">???</span>
         </div>
+        <div id="modeLabel" class="mode-badge">💬 Chat</div>
         <div class="timer-container">
           <div id="timer" class="timer">2:00</div>
           <div id="timerBar" class="timer-bar"><div class="timer-fill"></div></div>
         </div>
       </div>
+
+      <!-- Challenge area: mode-specific UI injected here -->
+      <div id="challengeArea" class="challenge-area"></div>
+
+      <!-- Chat messages (visible in chat mode) -->
       <div id="chatMessages" class="chat-messages"></div>
       <div id="typingIndicator" class="typing-indicator hidden">
         <span class="dot"></span><span class="dot"></span><span class="dot"></span>
       </div>
-      <div class="chat-input">
+      <div id="chatInputArea" class="chat-input">
         <input type="text" id="messageInput" placeholder="Type a message..." maxlength="500" autocomplete="off">
         <button id="btnSend" class="pixel-btn send-btn">SEND</button>
       </div>
@@ -79,6 +85,7 @@
       <div class="vote-container">
         <h2>TIME'S UP!</h2>
         <p>Was your opponent...</p>
+        <div id="opponentSubmissionArea" class="opponent-submission-area"></div>
         <div class="vote-buttons">
           <button id="btnVoteHuman" class="pixel-btn vote-btn human-btn">
             <div class="vote-icon">👤</div>

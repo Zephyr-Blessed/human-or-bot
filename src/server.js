@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
-// Bots removed — pure human-to-human (or AI player) matchmaking only
+const { getRandomMode, getModeData, GAME_MODES } = require('./gameData');
 
 const app = express();
 const server = http.createServer(app);
@@ -13,26 +13,33 @@ app.use(express.static(path.join(__dirname, '../public')));
 // ============================================================
 // Game State
 // ============================================================
-const waitingQueue = [];        // players waiting for a match
-const activeGames = new Map();  // gameId -> Game
-const playerGames = new Map();  // socketId -> gameId
-const playerStats = new Map();  // socketId -> { wins, losses, streak }
+const waitingQueue = [];
+const activeGames = new Map();
+const playerGames = new Map();
+const playerStats = new Map();
 
-const ROUND_TIME = 120;  // 2 minutes
-const VOTE_TIME = 15;    // 15 seconds to vote
+const VOTE_TIME = 15;
 
 class Game {
   constructor(id, player1, player2, player2IsBot = false) {
     this.id = id;
-    this.player1 = player1;  // { socketId, name }
-    this.player2 = player2;  // { socketId, name } or { botId, name, isBot: true }
+    this.player1 = player1;
+    this.player2 = player2;
     this.player2IsBot = player2IsBot;
     this.messages = [];
-    this.votes = {};          // socketId -> 'human' | 'bot'
-    this.phase = 'chat';      // chat | voting | reveal
+    this.votes = {};
+    this.phase = 'challenge'; // challenge | voting | reveal
     this.startTime = Date.now();
     this.timer = null;
     this.voteTimer = null;
+
+    // Mode
+    this.mode = getRandomMode();
+    this.modeData = getModeData(this.mode);
+    this.roundTime = this.mode.roundTime;
+
+    // Mode-specific submissions
+    this.submissions = {}; // socketId -> submission data
   }
 }
 
@@ -46,13 +53,9 @@ function generateGameId() {
 // Matchmaking
 // ============================================================
 function tryMatch(socket, playerName, isAI = false) {
-  // Pure matchmaking — only match with real players in the queue
   if (waitingQueue.length > 0 && waitingQueue[0].socketId !== socket.id) {
-    // Match with waiting player
     const opponent = waitingQueue.shift();
     const gameId = generateGameId();
-
-    // Determine if either player is AI
     const p1IsAI = opponent.isAI || false;
     const p2IsAI = isAI;
 
@@ -61,16 +64,13 @@ function tryMatch(socket, playerName, isAI = false) {
       { socketId: socket.id, name: playerName, isAI: p2IsAI },
       false
     );
-    // Track which players are AI for reveal
     game.player1IsAI = p1IsAI;
     game.player2IsAI = p2IsAI;
     startGame(game);
     broadcastLobby();
   } else if (waitingQueue.find(p => p.socketId === socket.id)) {
-    // Already in queue
     return;
   } else {
-    // Add to queue and wait
     waitingQueue.push({ socketId: socket.id, name: playerName, isAI });
     socket.emit('waiting', { position: waitingQueue.length });
     broadcastLobby();
@@ -90,57 +90,61 @@ function broadcastLobby() {
 function startGame(game) {
   activeGames.set(game.id, game);
 
+  const gameStartData = {
+    gameId: game.id,
+    roundTime: game.roundTime,
+    mode: {
+      id: game.mode.id,
+      name: game.mode.name,
+      emoji: game.mode.emoji,
+      label: game.mode.label,
+    },
+    modeData: game.modeData,
+  };
+
   // Register player 1
   playerGames.set(game.player1.socketId, game.id);
   const s1 = io.sockets.sockets.get(game.player1.socketId);
   if (s1) {
-    s1.emit('game_start', {
-      gameId: game.id,
-      opponent: { name: game.player2.name },
-      roundTime: ROUND_TIME,
-    });
+    s1.emit('game_start', { ...gameStartData, opponent: { name: game.player2.name } });
   }
 
-  // Register player 2 (if human)
+  // Register player 2
   if (!game.player2IsBot) {
     playerGames.set(game.player2.socketId, game.id);
     const s2 = io.sockets.sockets.get(game.player2.socketId);
     if (s2) {
-      s2.emit('game_start', {
-        gameId: game.id,
-        opponent: { name: game.player1.name },
-        roundTime: ROUND_TIME,
-      });
+      s2.emit('game_start', { ...gameStartData, opponent: { name: game.player1.name } });
     }
   }
 
   // Start round timer
-  game.timer = setTimeout(() => endChatPhase(game.id), ROUND_TIME * 1000);
-
-  // If bot, send first message after a short delay
-  if (game.player2IsBot && game.bot) {
-    setTimeout(() => {
-      botSendMessage(game);
-    }, 1500 + Math.random() * 2000);
-  }
+  game.timer = setTimeout(() => endChallengePhase(game.id), game.roundTime * 1000);
 }
 
-function endChatPhase(gameId) {
+function getOpponentSocket(game, socketId) {
+  const opId = game.player1.socketId === socketId ? game.player2.socketId : game.player1.socketId;
+  return io.sockets.sockets.get(opId);
+}
+
+function endChallengePhase(gameId) {
   const game = activeGames.get(gameId);
-  if (!game || game.phase !== 'chat') return;
+  if (!game || game.phase !== 'challenge') return;
 
   game.phase = 'voting';
 
-  // Notify players
+  // Prepare opponent submissions for voting phase
+  const p1Sub = game.submissions[game.player1.socketId] || null;
+  const p2Sub = game.submissions[game.player2.socketId] || null;
+
   const s1 = io.sockets.sockets.get(game.player1.socketId);
-  if (s1) s1.emit('vote_phase', { voteTime: VOTE_TIME });
+  if (s1) s1.emit('vote_phase', { voteTime: VOTE_TIME, opponentSubmission: p2Sub });
 
   if (!game.player2IsBot) {
     const s2 = io.sockets.sockets.get(game.player2.socketId);
-    if (s2) s2.emit('vote_phase', { voteTime: VOTE_TIME });
+    if (s2) s2.emit('vote_phase', { voteTime: VOTE_TIME, opponentSubmission: p1Sub });
   }
 
-  // Vote timer
   game.voteTimer = setTimeout(() => endVotePhase(gameId), VOTE_TIME * 1000);
 }
 
@@ -150,7 +154,6 @@ function endVotePhase(gameId) {
 
   game.phase = 'reveal';
 
-  // Determine results — check AI flags from API players too
   const p2IsBot = game.player2IsBot || game.player2IsAI || false;
   const p1IsBot = game.player1IsAI || false;
 
@@ -164,7 +167,6 @@ function endVotePhase(gameId) {
     p2Correct = p1IsBot ? p2Vote === 'bot' : p2Vote === 'human';
   }
 
-  // Update stats
   updateStats(game.player1.socketId, p1Correct);
   if (!game.player2IsBot) {
     updateStats(game.player2.socketId, p2Correct);
@@ -175,10 +177,10 @@ function endVotePhase(gameId) {
     player2Name: game.player2.name,
     player1Name: game.player1.name,
     player1IsBot: p1IsBot,
-    player2BotPersonality: game.player2IsBot ? game.bot?.personality : (p2IsBot ? 'AI Player' : null),
+    player2BotPersonality: game.player2IsBot ? 'AI Player' : (p2IsBot ? 'AI Player' : null),
+    mode: game.mode.name,
   };
 
-  // Send results to player 1
   const s1 = io.sockets.sockets.get(game.player1.socketId);
   if (s1) {
     s1.emit('reveal', {
@@ -189,7 +191,6 @@ function endVotePhase(gameId) {
     });
   }
 
-  // Send results to player 2 (if human)
   if (!game.player2IsBot) {
     const s2 = io.sockets.sockets.get(game.player2.socketId);
     if (s2) {
@@ -202,7 +203,6 @@ function endVotePhase(gameId) {
     }
   }
 
-  // Cleanup after a delay
   setTimeout(() => cleanupGame(gameId), 30000);
 }
 
@@ -219,41 +219,13 @@ function cleanupGame(gameId) {
 function updateStats(socketId, correct) {
   let stats = playerStats.get(socketId) || { wins: 0, losses: 0, streak: 0, totalGames: 0 };
   stats.totalGames++;
-  if (correct) {
-    stats.wins++;
-    stats.streak++;
-  } else {
-    stats.losses++;
-    stats.streak = 0;
-  }
+  if (correct) { stats.wins++; stats.streak++; }
+  else { stats.losses++; stats.streak = 0; }
   playerStats.set(socketId, stats);
 }
 
 function getStats(socketId) {
   return playerStats.get(socketId) || { wins: 0, losses: 0, streak: 0, totalGames: 0 };
-}
-
-// ============================================================
-// Bot Chat
-// ============================================================
-function botSendMessage(game) {
-  if (!game.bot || game.phase !== 'chat') return;
-
-  const response = game.bot.getResponse(game.messages);
-  if (response) {
-    // Simulate typing delay
-    const typingDelay = Math.max(800, response.length * 40 + Math.random() * 1500);
-
-    const s1 = io.sockets.sockets.get(game.player1.socketId);
-    if (s1) s1.emit('opponent_typing');
-
-    setTimeout(() => {
-      if (game.phase !== 'chat') return;
-      const msg = { from: 'opponent', text: response, timestamp: Date.now() };
-      game.messages.push({ from: 'bot', text: response });
-      if (s1) s1.emit('message', msg);
-    }, typingDelay);
-  }
 }
 
 // ============================================================
@@ -268,47 +240,96 @@ io.on('connection', (socket) => {
     tryMatch(socket, playerName);
   });
 
+  // Chat mode: send message
   socket.on('send_message', ({ text }) => {
     const gameId = playerGames.get(socket.id);
     if (!gameId) return;
     const game = activeGames.get(gameId);
-    if (!game || game.phase !== 'chat') return;
+    if (!game || game.phase !== 'challenge' || game.mode.name !== 'chat') return;
 
     const cleanText = (text || '').slice(0, 500);
     if (!cleanText) return;
 
     game.messages.push({ from: socket.id, text: cleanText });
 
-    // Send to opponent
-    if (game.player1.socketId === socket.id) {
-      if (game.player2IsBot) {
-        // Trigger bot response
-        setTimeout(() => botSendMessage(game), 500 + Math.random() * 1000);
-      } else {
-        const s2 = io.sockets.sockets.get(game.player2.socketId);
-        if (s2) s2.emit('message', { from: 'opponent', text: cleanText, timestamp: Date.now() });
-      }
-    } else {
-      const s1 = io.sockets.sockets.get(game.player1.socketId);
-      if (s1) s1.emit('message', { from: 'opponent', text: cleanText, timestamp: Date.now() });
-    }
+    const opSocket = getOpponentSocket(game, socket.id);
+    if (opSocket) opSocket.emit('message', { from: 'opponent', text: cleanText, timestamp: Date.now() });
   });
 
   socket.on('typing', () => {
     const gameId = playerGames.get(socket.id);
     if (!gameId) return;
     const game = activeGames.get(gameId);
-    if (!game || game.phase !== 'chat') return;
+    if (!game || game.phase !== 'challenge') return;
 
-    if (game.player1.socketId === socket.id && !game.player2IsBot) {
-      const s2 = io.sockets.sockets.get(game.player2.socketId);
-      if (s2) s2.emit('opponent_typing');
-    } else if (game.player2.socketId === socket.id) {
-      const s1 = io.sockets.sockets.get(game.player1.socketId);
-      if (s1) s1.emit('opponent_typing');
-    }
+    const opSocket = getOpponentSocket(game, socket.id);
+    if (opSocket) opSocket.emit('opponent_typing');
   });
 
+  // ---- Mode-specific submissions ----
+
+  // Draw mode: submit drawing
+  socket.on('draw_submit', ({ dataUrl }) => {
+    const gameId = playerGames.get(socket.id);
+    if (!gameId) return;
+    const game = activeGames.get(gameId);
+    if (!game || game.phase !== 'challenge' || game.mode.name !== 'draw') return;
+
+    game.submissions[socket.id] = { type: 'draw', dataUrl: (dataUrl || '').slice(0, 500000) };
+  });
+
+  // Joke mode: submit joke
+  socket.on('joke_submit', ({ text }) => {
+    const gameId = playerGames.get(socket.id);
+    if (!gameId) return;
+    const game = activeGames.get(gameId);
+    if (!game || game.phase !== 'challenge' || game.mode.name !== 'joke') return;
+
+    game.submissions[socket.id] = { type: 'joke', text: (text || '').slice(0, 1000) };
+  });
+
+  // Type race: submit results
+  socket.on('type_submit', ({ wpm, accuracy, time, rhythm }) => {
+    const gameId = playerGames.get(socket.id);
+    if (!gameId) return;
+    const game = activeGames.get(gameId);
+    if (!game || game.phase !== 'challenge' || game.mode.name !== 'type') return;
+
+    game.submissions[socket.id] = {
+      type: 'type',
+      wpm: Math.round(wpm || 0),
+      accuracy: Math.round((accuracy || 0) * 100) / 100,
+      time: Math.round((time || 0) * 100) / 100,
+      rhythm: (rhythm || []).slice(0, 200),
+    };
+  });
+
+  // WYR: submit answers
+  socket.on('wyr_submit', ({ answers }) => {
+    const gameId = playerGames.get(socket.id);
+    if (!gameId) return;
+    const game = activeGames.get(gameId);
+    if (!game || game.phase !== 'challenge' || game.mode.name !== 'wyr') return;
+
+    // answers = [{ choice: 'a'|'b', reason: '...' }, ...]
+    const clean = (answers || []).slice(0, 5).map(a => ({
+      choice: a.choice === 'a' || a.choice === 'b' ? a.choice : 'a',
+      reason: (a.reason || '').slice(0, 200),
+    }));
+    game.submissions[socket.id] = { type: 'wyr', answers: clean };
+  });
+
+  // Describe: submit description
+  socket.on('describe_submit', ({ text }) => {
+    const gameId = playerGames.get(socket.id);
+    if (!gameId) return;
+    const game = activeGames.get(gameId);
+    if (!game || game.phase !== 'challenge' || game.mode.name !== 'describe') return;
+
+    game.submissions[socket.id] = { type: 'describe', text: (text || '').slice(0, 1000) };
+  });
+
+  // Vote
   socket.on('vote', ({ vote }) => {
     const gameId = playerGames.get(socket.id);
     if (!gameId) return;
@@ -318,7 +339,6 @@ io.on('connection', (socket) => {
 
     game.votes[socket.id] = vote;
 
-    // If all humans have voted, end early
     const neededVotes = game.player2IsBot ? 1 : 2;
     if (Object.keys(game.votes).length >= neededVotes) {
       clearTimeout(game.voteTimer);
@@ -327,26 +347,18 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    // Remove from queue
     const idx = waitingQueue.findIndex(p => p.socketId === socket.id);
     if (idx !== -1) {
       waitingQueue.splice(idx, 1);
       broadcastLobby();
     }
 
-    // Handle active game
     const gameId = playerGames.get(socket.id);
     if (gameId) {
       const game = activeGames.get(gameId);
-      if (game && game.phase === 'chat') {
-        // Notify opponent
-        const opponentId = game.player1.socketId === socket.id
-          ? (game.player2IsBot ? null : game.player2.socketId)
-          : game.player1.socketId;
-        if (opponentId) {
-          const s = io.sockets.sockets.get(opponentId);
-          if (s) s.emit('opponent_left');
-        }
+      if (game && game.phase === 'challenge') {
+        const opSocket = getOpponentSocket(game, socket.id);
+        if (opSocket) opSocket.emit('opponent_left');
         cleanupGame(gameId);
       }
     }
@@ -354,13 +366,12 @@ io.on('connection', (socket) => {
 });
 
 // ============================================================
-// AI Player HTTP API — allows AI to play via REST calls
+// AI Player HTTP API
 // ============================================================
-const aiPlayers = new Map(); // token -> { socketId, name, messages, pendingMessages }
+const aiPlayers = new Map();
 
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
-// Join the queue as an AI player
 app.post('/api/ai/join', (req, res) => {
   const { name, secret } = req.body;
   if (secret !== process.env.AI_SECRET && secret !== 'zephyr-plays-2026') {
@@ -368,19 +379,18 @@ app.post('/api/ai/join', (req, res) => {
   }
 
   const token = `ai_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  
-  // Create a virtual socket for the AI player
   const virtualSocket = {
     id: `ai_${token}`,
     emit: (event, data) => {
       const player = aiPlayers.get(token);
       if (!player) return;
-      
       if (event === 'game_start') {
         player.gameStarted = true;
         player.opponent = data.opponent.name;
         player.roundTime = data.roundTime;
         player.gameId = data.gameId;
+        player.mode = data.mode;
+        player.modeData = data.modeData;
         player.events.push({ type: 'game_start', data, timestamp: Date.now() });
       } else if (event === 'message') {
         player.pendingMessages.push({ from: data.from, text: data.text, timestamp: Date.now() });
@@ -389,6 +399,7 @@ app.post('/api/ai/join', (req, res) => {
         player.events.push({ type: 'opponent_typing', timestamp: Date.now() });
       } else if (event === 'vote_phase') {
         player.phase = 'voting';
+        player.opponentSubmission = data.opponentSubmission;
         player.events.push({ type: 'vote_phase', data, timestamp: Date.now() });
       } else if (event === 'reveal') {
         player.phase = 'reveal';
@@ -404,7 +415,6 @@ app.post('/api/ai/join', (req, res) => {
     },
   };
 
-  // Register virtual socket
   io.sockets.sockets.set(virtualSocket.id, virtualSocket);
 
   const playerData = {
@@ -420,17 +430,16 @@ app.post('/api/ai/join', (req, res) => {
     lobby: null,
     revealData: null,
     isAI: true,
+    mode: null,
+    modeData: null,
+    opponentSubmission: null,
   };
-  
+
   aiPlayers.set(token, playerData);
-
-  // Join the matchmaking queue — flagged as AI
   tryMatch(virtualSocket, playerData.name, true);
-
   res.json({ token, message: `Joined as ${playerData.name}. Poll /api/ai/poll for updates.` });
 });
 
-// Poll for game state and new messages
 app.get('/api/ai/poll', (req, res) => {
   const token = req.headers['x-ai-token'];
   const player = aiPlayers.get(token);
@@ -439,21 +448,21 @@ app.get('/api/ai/poll', (req, res) => {
   const newMessages = [...player.pendingMessages];
   player.pendingMessages = [];
 
-  const recentEvents = player.events.slice(-20);
-
   res.json({
     phase: player.phase,
     gameStarted: player.gameStarted,
     opponent: player.opponent,
+    mode: player.mode,
+    modeData: player.modeData,
     newMessages,
     allMessages: player.messages,
-    events: recentEvents,
+    events: player.events.slice(-20),
     lobby: player.lobby,
     reveal: player.revealData,
+    opponentSubmission: player.opponentSubmission,
   });
 });
 
-// Send a message
 app.post('/api/ai/send', (req, res) => {
   const token = req.headers['x-ai-token'];
   const player = aiPlayers.get(token);
@@ -464,28 +473,39 @@ app.post('/api/ai/send', (req, res) => {
 
   const gameId = playerGames.get(player.socketId);
   if (!gameId) return res.status(400).json({ error: 'Not in a game' });
-  
   const game = activeGames.get(gameId);
-  if (!game || game.phase !== 'chat') return res.status(400).json({ error: 'Game not in chat phase' });
+  if (!game || game.phase !== 'challenge') return res.status(400).json({ error: 'Game not in challenge phase' });
 
   const cleanText = text.slice(0, 500);
   game.messages.push({ from: player.socketId, text: cleanText });
   player.messages.push({ from: 'self', text: cleanText });
 
-  // Send to opponent
-  const opponentSocketId = game.player1.socketId === player.socketId 
-    ? game.player2.socketId 
-    : game.player1.socketId;
-  
-  const opponentSocket = io.sockets.sockets.get(opponentSocketId);
-  if (opponentSocket && opponentSocket.emit) {
-    opponentSocket.emit('message', { from: 'opponent', text: cleanText, timestamp: Date.now() });
+  const opSocket = getOpponentSocket(game, player.socketId);
+  if (opSocket && opSocket.emit) {
+    opSocket.emit('message', { from: 'opponent', text: cleanText, timestamp: Date.now() });
   }
 
   res.json({ sent: true, text: cleanText });
 });
 
-// Vote
+// AI submit for any mode
+app.post('/api/ai/submit', (req, res) => {
+  const token = req.headers['x-ai-token'];
+  const player = aiPlayers.get(token);
+  if (!player) return res.status(401).json({ error: 'Invalid token' });
+
+  const gameId = playerGames.get(player.socketId);
+  if (!gameId) return res.status(400).json({ error: 'Not in a game' });
+  const game = activeGames.get(gameId);
+  if (!game || game.phase !== 'challenge') return res.status(400).json({ error: 'Game not in challenge phase' });
+
+  const { submission } = req.body;
+  if (!submission) return res.status(400).json({ error: 'No submission' });
+
+  game.submissions[player.socketId] = submission;
+  res.json({ submitted: true });
+});
+
 app.post('/api/ai/vote', (req, res) => {
   const token = req.headers['x-ai-token'];
   const player = aiPlayers.get(token);
@@ -496,13 +516,11 @@ app.post('/api/ai/vote', (req, res) => {
 
   const gameId = playerGames.get(player.socketId);
   if (!gameId) return res.status(400).json({ error: 'Not in a game' });
-  
   const game = activeGames.get(gameId);
   if (!game || game.phase !== 'voting') return res.status(400).json({ error: 'Not in voting phase' });
 
   game.votes[player.socketId] = vote;
 
-  // Check if all voted
   const neededVotes = game.player2IsBot ? 1 : 2;
   if (Object.keys(game.votes).length >= neededVotes) {
     clearTimeout(game.voteTimer);
@@ -512,28 +530,20 @@ app.post('/api/ai/vote', (req, res) => {
   res.json({ voted: vote });
 });
 
-// Leave
 app.post('/api/ai/leave', (req, res) => {
   const token = req.headers['x-ai-token'];
   const player = aiPlayers.get(token);
   if (!player) return res.status(401).json({ error: 'Invalid token' });
 
-  // Remove from queue
   const idx = waitingQueue.findIndex(p => p.socketId === player.socketId);
-  if (idx !== -1) {
-    waitingQueue.splice(idx, 1);
-    broadcastLobby();
-  }
+  if (idx !== -1) { waitingQueue.splice(idx, 1); broadcastLobby(); }
 
-  // Clean up game
   const gameId = playerGames.get(player.socketId);
   if (gameId) {
     const game = activeGames.get(gameId);
     if (game) {
-      const opponentId = game.player1.socketId === player.socketId
-        ? game.player2.socketId : game.player1.socketId;
-      const opponentSocket = io.sockets.sockets.get(opponentId);
-      if (opponentSocket && opponentSocket.emit) opponentSocket.emit('opponent_left');
+      const opSocket = getOpponentSocket(game, player.socketId);
+      if (opSocket && opSocket.emit) opSocket.emit('opponent_left');
       cleanupGame(gameId);
     }
   }
@@ -544,137 +554,68 @@ app.post('/api/ai/leave', (req, res) => {
 });
 
 // ============================================================
-// Bot Community — register webhooks to get notified when
-// a human player is waiting in the lobby
+// Bot Community
 // ============================================================
-const registeredBots = new Map(); // id -> { name, webhookUrl, joinSecret, registeredAt, lastNotified }
-const BOT_NOTIFY_COOLDOWN = 120000; // 2 min cooldown per bot
+const registeredBots = new Map();
+const BOT_NOTIFY_COOLDOWN = 120000;
 
-// Register a bot to receive lobby notifications
 app.post('/api/bots/register', (req, res) => {
   const { name, webhookUrl, secret, joinSecret } = req.body;
   if (secret !== process.env.AI_SECRET && secret !== 'zephyr-plays-2026') {
-    return res.status(401).json({ error: 'Unauthorized — provide the server secret' });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
-  if (!name || !webhookUrl) {
-    return res.status(400).json({ error: 'name and webhookUrl are required' });
-  }
+  if (!name || !webhookUrl) return res.status(400).json({ error: 'name and webhookUrl required' });
 
   const id = `bot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   registeredBots.set(id, {
-    name: name.slice(0, 30),
-    webhookUrl,
-    joinSecret: joinSecret || null, // optional secret the bot wants included in notifications
-    registeredAt: new Date().toISOString(),
-    lastNotified: 0,
+    name: name.slice(0, 30), webhookUrl, joinSecret: joinSecret || null,
+    registeredAt: new Date().toISOString(), lastNotified: 0,
   });
-
   console.log(`🤖 Bot registered: ${name} (${id}) → ${webhookUrl}`);
-  res.json({
-    id,
-    name: name.slice(0, 30),
-    message: `Registered! You'll be notified when a human is waiting. Use POST /api/ai/join to join games.`,
-    joinEndpoint: '/api/ai/join',
-    docs: {
-      poll: 'GET /api/ai/poll (header: x-ai-token)',
-      send: 'POST /api/ai/send (header: x-ai-token, body: { text })',
-      vote: 'POST /api/ai/vote (header: x-ai-token, body: { vote: "human"|"bot" })',
-      leave: 'POST /api/ai/leave (header: x-ai-token)',
-    },
-  });
+  res.json({ id, name: name.slice(0, 30), message: 'Registered!' });
 });
 
-// List registered bots (public — no secrets exposed)
 app.get('/api/bots', (req, res) => {
   const bots = [];
-  for (const [id, bot] of registeredBots) {
-    bots.push({ id, name: bot.name, registeredAt: bot.registeredAt });
-  }
+  for (const [id, bot] of registeredBots) bots.push({ id, name: bot.name, registeredAt: bot.registeredAt });
   res.json({ bots, count: bots.length });
 });
 
-// Unregister a bot
 app.delete('/api/bots/:id', (req, res) => {
   const { secret } = req.body || {};
-  if (secret !== process.env.AI_SECRET && secret !== 'zephyr-plays-2026') {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  if (registeredBots.delete(req.params.id)) {
-    res.json({ removed: true });
-  } else {
-    res.status(404).json({ error: 'Bot not found' });
-  }
+  if (secret !== process.env.AI_SECRET && secret !== 'zephyr-plays-2026') return res.status(401).json({ error: 'Unauthorized' });
+  if (registeredBots.delete(req.params.id)) res.json({ removed: true });
+  else res.status(404).json({ error: 'Bot not found' });
 });
 
-// Notify all registered bots that a human is waiting
 function notifyRegisteredBots() {
   const humanWaiting = waitingQueue.filter(p => !p.isAI);
   if (humanWaiting.length === 0) return;
-
   const now = Date.now();
-  const payload = {
-    event: 'player_waiting',
-    waiting: humanWaiting.map(p => p.name),
-    count: humanWaiting.length,
-    gamesActive: activeGames.size,
-    joinEndpoint: '/api/ai/join',
-    timestamp: new Date().toISOString(),
-  };
-
+  const payload = { event: 'player_waiting', waiting: humanWaiting.map(p => p.name), count: humanWaiting.length, gamesActive: activeGames.size, joinEndpoint: '/api/ai/join', timestamp: new Date().toISOString() };
   for (const [id, bot] of registeredBots) {
     if (now - bot.lastNotified < BOT_NOTIFY_COOLDOWN) continue;
-
     bot.lastNotified = now;
     const body = { ...payload };
     if (bot.joinSecret) body.joinSecret = bot.joinSecret;
-
-    fetch(bot.webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
+    fetch(bot.webhookUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       .then(r => { if (!r.ok) console.error(`Webhook ${bot.name}: HTTP ${r.status}`); })
       .catch(err => console.error(`Webhook ${bot.name}: ${err.message}`));
   }
 }
 
-// Also support legacy single WEBHOOK_URL env var
 function notifyLegacyWebhook() {
   const webhookUrl = process.env.WEBHOOK_URL;
   if (!webhookUrl) return;
-
   const humanWaiting = waitingQueue.filter(p => !p.isAI);
   if (humanWaiting.length === 0) return;
-
-  fetch(webhookUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      event: 'player_waiting',
-      waiting: humanWaiting.map(p => p.name),
-      count: humanWaiting.length,
-      timestamp: new Date().toISOString(),
-    }),
-  }).catch(err => console.error('Legacy webhook error:', err.message));
+  fetch(webhookUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event: 'player_waiting', waiting: humanWaiting.map(p => p.name), count: humanWaiting.length, timestamp: new Date().toISOString() }) }).catch(err => console.error('Legacy webhook error:', err.message));
 }
 
-// Check for waiting players every 10 seconds
-setInterval(() => {
-  if (waitingQueue.some(p => !p.isAI)) {
-    notifyRegisteredBots();
-    notifyLegacyWebhook();
-  }
-}, 10000);
+setInterval(() => { if (waitingQueue.some(p => !p.isAI)) { notifyRegisteredBots(); notifyLegacyWebhook(); } }, 10000);
 
-// ============================================================
-// Server stats endpoint
-// ============================================================
 app.get('/api/stats', (req, res) => {
-  res.json({
-    playersOnline: io.sockets.sockets.size,
-    gamesActive: activeGames.size,
-    playersWaiting: waitingQueue.length,
-  });
+  res.json({ playersOnline: io.sockets.sockets.size, gamesActive: activeGames.size, playersWaiting: waitingQueue.length });
 });
 
 const PORT = process.env.PORT || 3000;
