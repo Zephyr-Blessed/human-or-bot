@@ -386,6 +386,7 @@ app.post('/api/ai/join', (req, res) => {
       if (!player) return;
       if (event === 'game_start') {
         player.gameStarted = true;
+        player.phase = 'challenge';
         player.opponent = data.opponent.name;
         player.roundTime = data.roundTime;
         player.gameId = data.gameId;
