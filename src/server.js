@@ -21,7 +21,7 @@ const playerStats = new Map();
 const VOTE_TIME = 15;
 
 class Game {
-  constructor(id, player1, player2, player2IsBot = false) {
+  constructor(id, player1, player2, player2IsBot = false, forcedMode = null) {
     this.id = id;
     this.player1 = player1;
     this.player2 = player2;
@@ -33,8 +33,10 @@ class Game {
     this.timer = null;
     this.voteTimer = null;
 
-    // Mode
-    this.mode = getRandomMode();
+    // Mode — can be forced via forcedMode param
+    this.mode = forcedMode
+      ? (GAME_MODES.find(m => m.name === forcedMode) || getRandomMode())
+      : getRandomMode();
     this.modeData = getModeData(this.mode);
     this.roundTime = this.mode.roundTime;
 
@@ -52,17 +54,21 @@ function generateGameId() {
 // ============================================================
 // Matchmaking
 // ============================================================
-function tryMatch(socket, playerName, isAI = false) {
+function tryMatch(socket, playerName, isAI = false, preferredMode = null) {
   if (waitingQueue.length > 0 && waitingQueue[0].socketId !== socket.id) {
     const opponent = waitingQueue.shift();
     const gameId = generateGameId();
     const p1IsAI = opponent.isAI || false;
     const p2IsAI = isAI;
 
+    // Use mode preference from either player (first one wins)
+    const forcedMode = opponent.preferredMode || preferredMode || null;
+
     const game = new Game(gameId,
       { socketId: opponent.socketId, name: opponent.name, isAI: p1IsAI },
       { socketId: socket.id, name: playerName, isAI: p2IsAI },
-      false
+      false,
+      forcedMode
     );
     game.player1IsAI = p1IsAI;
     game.player2IsAI = p2IsAI;
@@ -71,7 +77,7 @@ function tryMatch(socket, playerName, isAI = false) {
   } else if (waitingQueue.find(p => p.socketId === socket.id)) {
     return;
   } else {
-    waitingQueue.push({ socketId: socket.id, name: playerName, isAI });
+    waitingQueue.push({ socketId: socket.id, name: playerName, isAI, preferredMode });
     socket.emit('waiting', { position: waitingQueue.length });
     broadcastLobby();
   }
@@ -235,9 +241,9 @@ io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
   broadcastLobby();
 
-  socket.on('find_game', ({ name }) => {
+  socket.on('find_game', ({ name, mode }) => {
     const playerName = (name || 'Anonymous').slice(0, 20);
-    tryMatch(socket, playerName);
+    tryMatch(socket, playerName, false, mode || null);
   });
 
   // Chat mode: send message
@@ -437,7 +443,7 @@ app.post('/api/ai/join', (req, res) => {
   };
 
   aiPlayers.set(token, playerData);
-  tryMatch(virtualSocket, playerData.name, true);
+  tryMatch(virtualSocket, playerData.name, true, req.body.mode || null);
   res.json({ token, message: `Joined as ${playerData.name}. Poll /api/ai/poll for updates.` });
 });
 

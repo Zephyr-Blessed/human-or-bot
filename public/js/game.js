@@ -64,7 +64,8 @@ function showScreen(name) {
 // ============================================================
 els.btnPlay.addEventListener('click', () => {
   const name = els.playerName.value.trim() || 'Anonymous';
-  socket.emit('find_game', { name });
+  const urlMode = new URLSearchParams(window.location.search).get('mode');
+  socket.emit('find_game', { name, mode: urlMode || undefined });
   showScreen('waiting');
 });
 els.playerName.addEventListener('keypress', (e) => { if (e.key === 'Enter') els.btnPlay.click(); });
@@ -621,7 +622,8 @@ socket.on('reveal', (data) => {
 // ============================================================
 els.btnPlayAgain.addEventListener('click', () => {
   const name = els.playerName.value.trim() || 'Anonymous';
-  socket.emit('find_game', { name });
+  const urlMode = new URLSearchParams(window.location.search).get('mode');
+  socket.emit('find_game', { name, mode: urlMode || undefined });
   showScreen('waiting');
 });
 
