@@ -102,6 +102,9 @@ function pickRandomN(arr, n) {
 }
 
 function getRandomMode() {
+  // TODO: remove hardcode after testing — Tim wants draw mode
+  const drawMode = GAME_MODES.find(m => m.name === 'draw');
+  if (drawMode) return drawMode;
   return GAME_MODES[Math.floor(Math.random() * GAME_MODES.length)];
 }
 
