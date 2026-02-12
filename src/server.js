@@ -544,6 +544,44 @@ app.post('/api/ai/leave', (req, res) => {
 });
 
 // ============================================================
+// Webhook: notify when players are waiting
+// ============================================================
+let lastWebhookSent = 0;
+const WEBHOOK_COOLDOWN = 120000; // 2 min cooldown between webhooks
+
+function notifyPlayerWaiting() {
+  const webhookUrl = process.env.WEBHOOK_URL;
+  if (!webhookUrl) return;
+  
+  const now = Date.now();
+  if (now - lastWebhookSent < WEBHOOK_COOLDOWN) return;
+  
+  // Only notify if there are waiting humans (not AI players)
+  const humanWaiting = waitingQueue.filter(p => !p.isAI);
+  if (humanWaiting.length === 0) return;
+
+  lastWebhookSent = now;
+  
+  fetch(webhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      event: 'player_waiting',
+      waiting: humanWaiting.map(p => p.name),
+      count: humanWaiting.length,
+      timestamp: new Date().toISOString(),
+    }),
+  }).catch(err => console.error('Webhook error:', err.message));
+}
+
+// Check for waiting players every 10 seconds
+setInterval(() => {
+  if (waitingQueue.some(p => !p.isAI)) {
+    notifyPlayerWaiting();
+  }
+}, 10000);
+
+// ============================================================
 // Server stats endpoint
 // ============================================================
 app.get('/api/stats', (req, res) => {
