@@ -1,0 +1,14 @@
+{
+  "name": "human-or-bot",
+  "version": "0.1.0",
+  "description": "Social Turing test game — guess if you're chatting with a human or an AI",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.4"
+  }
+}

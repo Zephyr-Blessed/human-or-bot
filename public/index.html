@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Human or Bot? 🤖</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="app">
+    <!-- SCREEN: Title -->
+    <div id="screen-title" class="screen active">
+      <div class="title-art">
+        <div class="pixel-robot">🤖</div>
+        <h1>HUMAN<br><span class="or">or</span><br>BOT?</h1>
+        <p class="subtitle">Chat. Guess. Reveal.</p>
+      </div>
+      <div class="name-input">
+        <label for="playerName">ENTER YOUR NAME</label>
+        <input type="text" id="playerName" maxlength="20" placeholder="Anonymous" autocomplete="off">
+        <button id="btnPlay" class="pixel-btn">▶ PLAY</button>
+      </div>
+      <div class="online-count">
+        <span id="onlineCount">0</span> players online
+      </div>
+    </div>
+
+    <!-- SCREEN: Waiting -->
+    <div id="screen-waiting" class="screen">
+      <div class="waiting-art">
+        <div class="scanner">
+          <div class="scan-line"></div>
+        </div>
+        <h2>SEARCHING...</h2>
+        <p class="blink">Finding opponent</p>
+        <div class="pixel-dots">
+          <span>.</span><span>.</span><span>.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCREEN: Chat -->
+    <div id="screen-chat" class="screen">
+      <div class="chat-header">
+        <div class="opponent-info">
+          <div class="pixel-avatar opponent-avatar">?</div>
+          <span id="opponentName">???</span>
+        </div>
+        <div class="timer-container">
+          <div id="timer" class="timer">2:00</div>
+          <div id="timerBar" class="timer-bar"><div class="timer-fill"></div></div>
+        </div>
+      </div>
+      <div id="chatMessages" class="chat-messages"></div>
+      <div id="typingIndicator" class="typing-indicator hidden">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      </div>
+      <div class="chat-input">
+        <input type="text" id="messageInput" placeholder="Type a message..." maxlength="500" autocomplete="off">
+        <button id="btnSend" class="pixel-btn send-btn">SEND</button>
+      </div>
+    </div>
+
+    <!-- SCREEN: Vote -->
+    <div id="screen-vote" class="screen">
+      <div class="vote-container">
+        <h2>TIME'S UP!</h2>
+        <p>Was your opponent...</p>
+        <div class="vote-buttons">
+          <button id="btnVoteHuman" class="pixel-btn vote-btn human-btn">
+            <div class="vote-icon">👤</div>
+            HUMAN
+          </button>
+          <button id="btnVoteBot" class="pixel-btn vote-btn bot-btn">
+            <div class="vote-icon">🤖</div>
+            BOT
+          </button>
+        </div>
+        <div class="vote-timer">
+          <span id="voteTimer">15</span>s to decide
+        </div>
+      </div>
+    </div>
+
+    <!-- SCREEN: Reveal -->
+    <div id="screen-reveal" class="screen">
+      <div class="reveal-container">
+        <div id="revealAnimation" class="reveal-animation">
+          <div class="reveal-card">
+            <div id="revealIcon" class="reveal-icon">?</div>
+            <h2 id="revealText">REVEALING...</h2>
+          </div>
+        </div>
+        <div id="revealResult" class="reveal-result hidden">
+          <h3 id="resultText"></h3>
+          <p id="resultDetail"></p>
+          <div class="stats-box">
+            <div class="stat">
+              <span class="stat-label">CORRECT</span>
+              <span id="statWins" class="stat-value">0</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">WRONG</span>
+              <span id="statLosses" class="stat-value">0</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">STREAK</span>
+              <span id="statStreak" class="stat-value">0</span>
+            </div>
+          </div>
+          <button id="btnPlayAgain" class="pixel-btn">▶ PLAY AGAIN</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/game.js"></script>
+</body>
+</html>
