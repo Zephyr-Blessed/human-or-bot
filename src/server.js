@@ -57,6 +57,7 @@ function tryMatch(socket, playerName) {
       false
     );
     startGame(game);
+    broadcastLobby();
   } else if (waitingQueue.find(p => p.socketId === socket.id)) {
     // Already in queue
     return;
@@ -64,7 +65,18 @@ function tryMatch(socket, playerName) {
     // Add to queue and wait
     waitingQueue.push({ socketId: socket.id, name: playerName });
     socket.emit('waiting', { position: waitingQueue.length });
+    broadcastLobby();
   }
+}
+
+function broadcastLobby() {
+  const lobbyPlayers = waitingQueue.map(p => p.name);
+  io.emit('lobby_update', {
+    waiting: lobbyPlayers,
+    count: lobbyPlayers.length,
+    online: io.sockets.sockets.size,
+    gamesActive: activeGames.size,
+  });
 }
 
 function startGame(game) {
@@ -237,6 +249,7 @@ function botSendMessage(game) {
 // ============================================================
 io.on('connection', (socket) => {
   console.log(`Player connected: ${socket.id}`);
+  broadcastLobby();
 
   socket.on('find_game', ({ name }) => {
     const playerName = (name || 'Anonymous').slice(0, 20);
@@ -304,7 +317,10 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     // Remove from queue
     const idx = waitingQueue.findIndex(p => p.socketId === socket.id);
-    if (idx !== -1) waitingQueue.splice(idx, 1);
+    if (idx !== -1) {
+      waitingQueue.splice(idx, 1);
+      broadcastLobby();
+    }
 
     // Handle active game
     const gameId = playerGames.get(socket.id);

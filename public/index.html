@@ -32,11 +32,23 @@
         <div class="scanner">
           <div class="scan-line"></div>
         </div>
-        <h2>SEARCHING...</h2>
-        <p class="blink">Finding opponent</p>
-        <div class="pixel-dots">
-          <span>.</span><span>.</span><span>.</span>
+        <h2>WAITING FOR OPPONENT...</h2>
+        <p class="blink">You'll be matched with the next player who joins</p>
+        <div class="lobby-info">
+          <div class="lobby-stat">
+            <span class="lobby-label">ONLINE</span>
+            <span id="lobbyOnline" class="lobby-value">0</span>
+          </div>
+          <div class="lobby-stat">
+            <span class="lobby-label">WAITING</span>
+            <span id="lobbyWaiting" class="lobby-value">0</span>
+          </div>
+          <div class="lobby-stat">
+            <span class="lobby-label">IN GAME</span>
+            <span id="lobbyGames" class="lobby-value">0</span>
+          </div>
         </div>
+        <div id="lobbyPlayers" class="lobby-players"></div>
       </div>
     </div>
 

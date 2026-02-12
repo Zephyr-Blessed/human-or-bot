@@ -70,10 +70,30 @@ els.playerName.addEventListener('keypress', (e) => {
 els.playerName.focus();
 
 // ============================================================
-// Waiting Screen
+// Waiting Screen & Lobby
 // ============================================================
 socket.on('waiting', ({ position }) => {
   // Already showing waiting screen
+});
+
+socket.on('lobby_update', ({ waiting, count, online, gamesActive }) => {
+  const lobbyOnline = document.getElementById('lobbyOnline');
+  const lobbyWaiting = document.getElementById('lobbyWaiting');
+  const lobbyGames = document.getElementById('lobbyGames');
+  const lobbyPlayers = document.getElementById('lobbyPlayers');
+
+  if (lobbyOnline) lobbyOnline.textContent = online;
+  if (lobbyWaiting) lobbyWaiting.textContent = count;
+  if (lobbyGames) lobbyGames.textContent = gamesActive;
+
+  // Also update title screen count
+  els.onlineCount.textContent = online;
+
+  if (lobbyPlayers) {
+    lobbyPlayers.innerHTML = waiting.map(name =>
+      `<div class="lobby-player"><span class="dot-online"></span>${name}</div>`
+    ).join('');
+  }
 });
 
 // ============================================================

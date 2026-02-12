@@ -206,6 +206,63 @@ h1 .or {
   40% { transform: translateY(-10px); }
 }
 
+.lobby-info {
+  display: flex;
+  gap: 2rem;
+  margin: 2rem 0 1.5rem;
+}
+
+.lobby-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.lobby-label {
+  font-size: 0.5rem;
+  color: var(--text-dim);
+  letter-spacing: 2px;
+}
+
+.lobby-value {
+  font-size: 1.5rem;
+  color: var(--accent);
+}
+
+.lobby-players {
+  margin-top: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  justify-content: center;
+  max-width: 400px;
+}
+
+.lobby-player {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.8rem;
+  font-size: 0.5rem;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.lobby-player .dot-online {
+  width: 6px;
+  height: 6px;
+  background: var(--primary);
+  border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
 /* ============================================================
    Chat Screen
    ============================================================ */
