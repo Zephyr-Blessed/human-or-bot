@@ -544,24 +544,108 @@ app.post('/api/ai/leave', (req, res) => {
 });
 
 // ============================================================
-// Webhook: notify when players are waiting
+// Bot Community — register webhooks to get notified when
+// a human player is waiting in the lobby
 // ============================================================
-let lastWebhookSent = 0;
-const WEBHOOK_COOLDOWN = 120000; // 2 min cooldown between webhooks
+const registeredBots = new Map(); // id -> { name, webhookUrl, joinSecret, registeredAt, lastNotified }
+const BOT_NOTIFY_COOLDOWN = 120000; // 2 min cooldown per bot
 
-function notifyPlayerWaiting() {
-  const webhookUrl = process.env.WEBHOOK_URL;
-  if (!webhookUrl) return;
-  
-  const now = Date.now();
-  if (now - lastWebhookSent < WEBHOOK_COOLDOWN) return;
-  
-  // Only notify if there are waiting humans (not AI players)
+// Register a bot to receive lobby notifications
+app.post('/api/bots/register', (req, res) => {
+  const { name, webhookUrl, secret, joinSecret } = req.body;
+  if (secret !== process.env.AI_SECRET && secret !== 'zephyr-plays-2026') {
+    return res.status(401).json({ error: 'Unauthorized — provide the server secret' });
+  }
+  if (!name || !webhookUrl) {
+    return res.status(400).json({ error: 'name and webhookUrl are required' });
+  }
+
+  const id = `bot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  registeredBots.set(id, {
+    name: name.slice(0, 30),
+    webhookUrl,
+    joinSecret: joinSecret || null, // optional secret the bot wants included in notifications
+    registeredAt: new Date().toISOString(),
+    lastNotified: 0,
+  });
+
+  console.log(`🤖 Bot registered: ${name} (${id}) → ${webhookUrl}`);
+  res.json({
+    id,
+    name: name.slice(0, 30),
+    message: `Registered! You'll be notified when a human is waiting. Use POST /api/ai/join to join games.`,
+    joinEndpoint: '/api/ai/join',
+    docs: {
+      poll: 'GET /api/ai/poll (header: x-ai-token)',
+      send: 'POST /api/ai/send (header: x-ai-token, body: { text })',
+      vote: 'POST /api/ai/vote (header: x-ai-token, body: { vote: "human"|"bot" })',
+      leave: 'POST /api/ai/leave (header: x-ai-token)',
+    },
+  });
+});
+
+// List registered bots (public — no secrets exposed)
+app.get('/api/bots', (req, res) => {
+  const bots = [];
+  for (const [id, bot] of registeredBots) {
+    bots.push({ id, name: bot.name, registeredAt: bot.registeredAt });
+  }
+  res.json({ bots, count: bots.length });
+});
+
+// Unregister a bot
+app.delete('/api/bots/:id', (req, res) => {
+  const { secret } = req.body || {};
+  if (secret !== process.env.AI_SECRET && secret !== 'zephyr-plays-2026') {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (registeredBots.delete(req.params.id)) {
+    res.json({ removed: true });
+  } else {
+    res.status(404).json({ error: 'Bot not found' });
+  }
+});
+
+// Notify all registered bots that a human is waiting
+function notifyRegisteredBots() {
   const humanWaiting = waitingQueue.filter(p => !p.isAI);
   if (humanWaiting.length === 0) return;
 
-  lastWebhookSent = now;
-  
+  const now = Date.now();
+  const payload = {
+    event: 'player_waiting',
+    waiting: humanWaiting.map(p => p.name),
+    count: humanWaiting.length,
+    gamesActive: activeGames.size,
+    joinEndpoint: '/api/ai/join',
+    timestamp: new Date().toISOString(),
+  };
+
+  for (const [id, bot] of registeredBots) {
+    if (now - bot.lastNotified < BOT_NOTIFY_COOLDOWN) continue;
+
+    bot.lastNotified = now;
+    const body = { ...payload };
+    if (bot.joinSecret) body.joinSecret = bot.joinSecret;
+
+    fetch(bot.webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(r => { if (!r.ok) console.error(`Webhook ${bot.name}: HTTP ${r.status}`); })
+      .catch(err => console.error(`Webhook ${bot.name}: ${err.message}`));
+  }
+}
+
+// Also support legacy single WEBHOOK_URL env var
+function notifyLegacyWebhook() {
+  const webhookUrl = process.env.WEBHOOK_URL;
+  if (!webhookUrl) return;
+
+  const humanWaiting = waitingQueue.filter(p => !p.isAI);
+  if (humanWaiting.length === 0) return;
+
   fetch(webhookUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -571,13 +655,14 @@ function notifyPlayerWaiting() {
       count: humanWaiting.length,
       timestamp: new Date().toISOString(),
     }),
-  }).catch(err => console.error('Webhook error:', err.message));
+  }).catch(err => console.error('Legacy webhook error:', err.message));
 }
 
 // Check for waiting players every 10 seconds
 setInterval(() => {
   if (waitingQueue.some(p => !p.isAI)) {
-    notifyPlayerWaiting();
+    notifyRegisteredBots();
+    notifyLegacyWebhook();
   }
 }, 10000);
 
